@@ -1,0 +1,17 @@
+[package]
+name = "satscanner"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ratatui = "0.27"
+crossterm = "0.27"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["rustls-tls", "json"] }
+sgp4 = "2"
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

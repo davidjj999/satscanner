@@ -1,4 +1,6 @@
 use crate::app::App;
+use crate::satellite::{coords::Geodetic, skypos};
+use chrono::Utc;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style, Modifier},
@@ -54,6 +56,32 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     let sky_area = chunks[0];
     let sidebar_area = chunks[1];
 
+    let now = Utc::now();
+    let obs = Geodetic {
+        lat: app.config.lat,
+        lon: app.config.lon,
+        alt: app.config.alt,
+    };
+
+    // --- Compute Sun and Moon positions ---
+    let (sun_az, sun_el) = skypos::sun_position(&now, obs);
+    let (moon_az, moon_el) = skypos::moon_position(&now, obs);
+
+    let sun_visible = sun_el > 0.0;
+    let moon_visible = moon_el > 0.0;
+
+    let sun_xy = if sun_visible {
+        Some(azel_to_xy(sun_az, sun_el))
+    } else {
+        None
+    };
+
+    let moon_xy = if moon_visible {
+        Some(azel_to_xy(moon_az, moon_el))
+    } else {
+        None
+    };
+
     // Build satellite point lists by regime, and track the selected satellite.
     let mut overhead_sats: Vec<(f64, f64, Color)> = Vec::new();
     let mut selected_pos: Option<(f64, f64)> = None;
@@ -101,6 +129,63 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
             // --- Elevation labels ---
             ctx.print(0.05, 0.68, Span::styled("60°", Style::default().fg(Color::DarkGray)));
             ctx.print(0.05, 0.35, Span::styled("30°", Style::default().fg(Color::DarkGray)));
+
+            // --- Sun (if above horizon) ---
+            if let Some((sx, sy)) = sun_xy {
+                // Draw a bright circle behind the label for visibility
+                ctx.draw(&Points {
+                    coords: &[(sx, sy)],
+                    color: Color::Yellow,
+                });
+                ctx.print(
+                    sx - 0.055,
+                    sy + 0.02,
+                    Span::styled(
+                        "☀",
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                );
+                ctx.print(
+                    sx + 0.065,
+                    sy + 0.02,
+                    Span::styled(
+                        "SUN",
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                );
+            }
+
+            // --- Moon (if above horizon) ---
+            if let Some((mx, my)) = moon_xy {
+                ctx.draw(&Points {
+                    coords: &[(mx, my)],
+                    color: Color::White,
+                });
+                ctx.print(
+                    mx - 0.055,
+                    my + 0.02,
+                    Span::styled(
+                        "☽",
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                );
+                ctx.print(
+                    mx + 0.065,
+                    my + 0.02,
+                    Span::styled(
+                        "MOON",
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                );
+            }
 
             // --- Satellite dots by regime ---
             // Draw each colour group as a single Points call for efficiency.

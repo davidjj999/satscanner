@@ -86,7 +86,7 @@ impl App {
     }
     
     pub fn navigate_spatial(&mut self, dx: f64, dy: f64) {
-        if self.current_view != View::Overhead { return; }
+        // Works in any view that tracks satellite positions
         
         let overhead_indices: Vec<usize> = self.sat_states.iter().enumerate()
             .filter(|(_, s)| s.el > 0.0)

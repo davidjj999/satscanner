@@ -5,6 +5,6 @@ pub mod overhead;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
     Overhead,
-    GlobeScale,
+    Sky,
     GlobeBands,
 }

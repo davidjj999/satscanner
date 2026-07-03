@@ -17,7 +17,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     match app.current_view {
         views::View::Overhead => views::overhead::draw(f, app, chunks[0]),
-        views::View::GlobeScale => views::globe_scale::draw(f, chunks[0]),
+        views::View::Sky => views::globe_scale::draw(f, app, chunks[0]),
         views::View::GlobeBands => views::globe_bands::draw(f, chunks[0]),
     }
 

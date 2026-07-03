@@ -35,7 +35,7 @@ pub fn draw_help_overlay(f: &mut Frame, area: Rect) {
         Line::from(vec![
             Span::raw("  "),
             Span::styled("1 / 2 / 3", Style::default().fg(Color::Yellow)),
-            Span::raw("    Switch views"),
+            Span::raw("    Switch views (Overhead / Sky / Bands)"),
         ]),
         Line::from(vec![
             Span::raw("  "),

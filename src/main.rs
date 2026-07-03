@@ -68,7 +68,7 @@ async fn main() -> Result<()> {
                 KeyCode::Esc => break,
                 KeyCode::Char('c') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => break,
                 KeyCode::Char('1') => app.set_view(views::View::Overhead),
-                KeyCode::Char('2') => app.set_view(views::View::GlobeScale),
+                KeyCode::Char('2') => app.set_view(views::View::Sky),
                 KeyCode::Char('3') => app.set_view(views::View::GlobeBands),
                 KeyCode::Char('+') | KeyCode::Char('=') => app.zoom_in(),
                 KeyCode::Char('-') | KeyCode::Char('_') => app.zoom_out(),

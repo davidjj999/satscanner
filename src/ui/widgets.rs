@@ -9,7 +9,7 @@ use ratatui::{
 pub fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
     let view_name = match app.current_view {
         crate::views::View::Overhead => "Overhead Map",
-        crate::views::View::GlobeScale => "To-Scale Globe",
+        crate::views::View::Sky => "Sky View",
         crate::views::View::GlobeBands => "Altitude-Banded Globe",
     };
 

@@ -12,10 +12,13 @@ use ratatui::{
     Frame,
 };
 
-/// Number of points used to approximate each elevation ring (horizon, 30°, 60°).
+/// Number of points used to approximate each elevation ring.
 const RING_SEGMENTS: usize = 60;
 
-/// Generate evenly-spaced points around a circle of the given radius.
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
 fn ring_points(radius: f64) -> Vec<(f64, f64)> {
     (0..RING_SEGMENTS)
         .map(|i| {
@@ -25,16 +28,12 @@ fn ring_points(radius: f64) -> Vec<(f64, f64)> {
         .collect()
 }
 
-/// Convert azimuth (degrees, 0=N, 90=E) and elevation (degrees, 0=horizon, 90=zenith)
-/// to canvas coordinates.  The sky circle has radius 1.0.
 fn azel_to_xy(az_deg: f64, el_deg: f64) -> (f64, f64) {
-    let r = 1.0 - el_deg / 90.0; // 0 at zenith, 1 at horizon
+    let r = 1.0 - el_deg / 90.0;
     let az_rad = az_deg.to_radians();
-    // Azimuth 0° (North) → top of the circle, increasing clockwise
     (r * az_rad.sin(), r * az_rad.cos())
 }
 
-/// Satellite regime → colour (matches the overhead view).
 fn regime_color(alt_km: f64) -> Color {
     if alt_km < 2000.0 {
         Color::Cyan
@@ -46,6 +45,31 @@ fn regime_color(alt_km: f64) -> Color {
         Color::Red
     }
 }
+
+fn is_space_station(name: &str) -> bool {
+    let upper = name.to_uppercase();
+    upper.contains("ISS")
+        || upper.contains("TIANHE")
+        || upper.contains("WENTIAN")
+        || upper.contains("MENGTAI")
+        || upper.contains("TIANGONG")
+        || upper == "CSS"
+}
+
+fn station_label(name: &str) -> &'static str {
+    let upper = name.to_uppercase();
+    if upper.starts_with("ISS") {
+        "ISS"
+    } else if upper.contains("TIAN") || upper.contains("TIANGONG") || upper == "CSS" {
+        "CSS"
+    } else {
+        "LAB"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Draw
+// ---------------------------------------------------------------------------
 
 pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default()
@@ -63,42 +87,35 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         alt: app.config.alt,
     };
 
-    // --- Compute Sun and Moon positions ---
+    // --- Sun and Moon ---
     let (sun_az, sun_el) = skypos::sun_position(&now, obs);
     let (moon_az, moon_el) = skypos::moon_position(&now, obs);
 
-    let sun_visible = sun_el > 0.0;
-    let moon_visible = moon_el > 0.0;
+    let sun_xy = (sun_el > 0.0).then(|| azel_to_xy(sun_az, sun_el));
+    let moon_xy = (moon_el > 0.0).then(|| azel_to_xy(moon_az, moon_el));
 
-    let sun_xy = if sun_visible {
-        Some(azel_to_xy(sun_az, sun_el))
-    } else {
-        None
-    };
-
-    let moon_xy = if moon_visible {
-        Some(azel_to_xy(moon_az, moon_el))
-    } else {
-        None
-    };
-
-    // Build satellite point lists by regime, and track the selected satellite.
-    let mut overhead_sats: Vec<(f64, f64, Color)> = Vec::new();
+    // --- Satellites ---
+    let mut sat_points: Vec<(f64, f64, Color)> = Vec::new();
     let mut selected_pos: Option<(f64, f64)> = None;
+    let mut station_sky: Vec<(f64, f64, &'static str)> = Vec::new();
 
     for (i, state) in app.sat_states.iter().enumerate() {
         if state.el <= 0.0 {
-            continue; // skip below-horizon satellites in sky view
+            continue;
         }
         let (x, y) = azel_to_xy(state.az, state.el);
 
         if Some(i) == app.selected_overhead_idx {
             selected_pos = Some((x, y));
-            continue; // don't also draw the coloured dot underneath
+            continue;
         }
 
-        let color = regime_color(state.geodetic.alt);
-        overhead_sats.push((x, y, color));
+        if is_space_station(&state.name) {
+            station_sky.push((x, y, station_label(&state.name)));
+        } else {
+            let color = regime_color(state.geodetic.alt);
+            sat_points.push((x, y, color));
+        }
     }
 
     let canvas = Canvas::default()
@@ -107,13 +124,11 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         .y_bounds([-1.3, 1.3])
         .paint(|ctx| {
             // --- Elevation rings ---
-            let ring_colors = [
-                (1.0, Color::DarkGray),       // horizon  (0°)
-                (2.0 / 3.0, Color::DarkGray), // 30°
-                (1.0 / 3.0, Color::DarkGray), // 60°
-            ];
-
-            for (radius, color) in &ring_colors {
+            for (radius, color) in &[
+                (1.0, Color::DarkGray),
+                (2.0 / 3.0, Color::DarkGray),
+                (1.0 / 3.0, Color::DarkGray),
+            ] {
                 ctx.draw(&Points {
                     coords: &ring_points(*radius),
                     color: *color,
@@ -130,67 +145,35 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
             ctx.print(0.05, 0.68, Span::styled("60°", Style::default().fg(Color::DarkGray)));
             ctx.print(0.05, 0.35, Span::styled("30°", Style::default().fg(Color::DarkGray)));
 
-            // --- Sun (if above horizon) ---
+            // --- Sun ---
             if let Some((sx, sy)) = sun_xy {
-                // Draw a bright circle behind the label for visibility
                 ctx.draw(&Points {
                     coords: &[(sx, sy)],
                     color: Color::Yellow,
                 });
-                ctx.print(
-                    sx - 0.055,
-                    sy + 0.02,
-                    Span::styled(
-                        "☀",
-                        Style::default()
-                            .fg(Color::Yellow)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                );
-                ctx.print(
-                    sx + 0.065,
-                    sy + 0.02,
-                    Span::styled(
-                        "SUN",
-                        Style::default()
-                            .fg(Color::Yellow)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                );
+                let sun_style = Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD);
+                ctx.print(sx - 0.055, sy + 0.02, Span::styled("☀", sun_style));
+                ctx.print(sx + 0.065, sy + 0.02, Span::styled("SUN", sun_style));
             }
 
-            // --- Moon (if above horizon) ---
+            // --- Moon ---
             if let Some((mx, my)) = moon_xy {
                 ctx.draw(&Points {
                     coords: &[(mx, my)],
                     color: Color::White,
                 });
-                ctx.print(
-                    mx - 0.055,
-                    my + 0.02,
-                    Span::styled(
-                        "☽",
-                        Style::default()
-                            .fg(Color::White)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                );
-                ctx.print(
-                    mx + 0.065,
-                    my + 0.02,
-                    Span::styled(
-                        "MOON",
-                        Style::default()
-                            .fg(Color::White)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                );
+                let moon_style = Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD);
+                ctx.print(mx - 0.055, my + 0.02, Span::styled("☽", moon_style));
+                ctx.print(mx + 0.065, my + 0.02, Span::styled("MOON", moon_style));
             }
 
             // --- Satellite dots by regime ---
-            // Draw each colour group as a single Points call for efficiency.
             for color in [Color::Cyan, Color::Yellow, Color::Magenta, Color::Red] {
-                let coords: Vec<(f64, f64)> = overhead_sats
+                let coords: Vec<(f64, f64)> = sat_points
                     .iter()
                     .filter(|(_, _, c)| *c == color)
                     .map(|(x, y, _)| (*x, *y))
@@ -201,6 +184,15 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
                         color,
                     });
                 }
+            }
+
+            // --- Space stations ---
+            let station_style = Style::default()
+                .fg(Color::LightGreen)
+                .add_modifier(Modifier::BOLD);
+            for &(x, y, label) in &station_sky {
+                ctx.print(x, y, Span::styled("◆", station_style));
+                ctx.print(x + 0.065, y + 0.02, Span::styled(label, station_style));
             }
 
             // --- Observer at zenith ---
@@ -216,7 +208,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
                 ),
             );
 
-            // --- Highlight selected satellite ---
+            // --- Selected satellite highlight ---
             if let Some((x, y)) = selected_pos {
                 ctx.print(
                     x,
@@ -233,11 +225,15 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
 
     f.render_widget(canvas, sky_area);
 
-    // --- Sidebar (reuses the same layout as overhead) ---
+    // --- Sidebar ---
     let mut sidebar_text = vec![];
     if let Some(idx) = app.selected_overhead_idx {
         if let Some(state) = app.sat_states.get(idx) {
-            let sat_color = regime_color(state.geodetic.alt);
+            let sat_color = if is_space_station(&state.name) {
+                Color::LightGreen
+            } else {
+                regime_color(state.geodetic.alt)
+            };
 
             sidebar_text.push(Line::from(Span::styled(
                 state.name.clone(),

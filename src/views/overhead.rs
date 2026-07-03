@@ -10,6 +10,29 @@ use ratatui::{
     Frame,
 };
 
+/// Detect crewed space stations by name so they can be rendered distinctly.
+fn is_space_station(name: &str) -> bool {
+    let upper = name.to_uppercase();
+    upper.contains("ISS")
+        || upper.contains("TIANHE")
+        || upper.contains("WENTIAN")
+        || upper.contains("MENGTAI")
+        || upper.contains("TIANGONG")
+        || upper == "CSS"
+}
+
+/// Short label to display next to a space station on the map.
+fn station_label(name: &str) -> &'static str {
+    let upper = name.to_uppercase();
+    if upper.starts_with("ISS") {
+        "ISS"
+    } else if upper.contains("TIAN") || upper.contains("TIANGONG") || upper == "CSS" {
+        "CSS"
+    } else {
+        "LAB"
+    }
+}
+
 pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
@@ -26,14 +49,24 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     let mut meo_points: Vec<(f64, f64)> = Vec::new();
     let mut geo_points: Vec<(f64, f64)> = Vec::new();
     let mut heo_points: Vec<(f64, f64)> = Vec::new();
+    // Space stations — drawn with a symbol + label, separate from Points layers.
+    let mut station_points: Vec<(f64, f64, &'static str)> = Vec::new();
 
     for (i, state) in app.sat_states.iter().enumerate() {
         // Skip the selected satellite — it is drawn as the ● highlight instead
         // to avoid sub-character misalignment between Points (braille) and print().
-        if Some(i) == selected_idx { continue; }
+        if Some(i) == selected_idx {
+            continue;
+        }
 
         if state.el > 0.0 {
-            if state.geodetic.alt < 2000.0 {
+            if is_space_station(&state.name) {
+                station_points.push((
+                    state.geodetic.lon,
+                    state.geodetic.lat,
+                    station_label(&state.name),
+                ));
+            } else if state.geodetic.alt < 2000.0 {
                 leo_points.push((state.geodetic.lon, state.geodetic.lat));
             } else if state.geodetic.alt < 35000.0 {
                 meo_points.push((state.geodetic.lon, state.geodetic.lat));
@@ -54,13 +87,17 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     // terminal braille dots are 2x4 per character.
     let dot_width = map_area.width.saturating_sub(2) as f64 * 2.0; // Subtract borders
     let dot_height = map_area.height.saturating_sub(2) as f64 * 4.0;
-    let r = if dot_height > 0.0 { dot_width / dot_height } else { 2.0 };
+    let r = if dot_height > 0.0 {
+        dot_width / dot_height
+    } else {
+        2.0
+    };
 
     // Set latitude span based on user's zoom level
     let y_span = app.zoom_level;
-    
-    // Scale X span based on terminal aspect ratio AND local latitude scaling (cos(lat))
-    let cos_lat = obs_lat.to_radians().cos().max(0.1); 
+
+    // Scale X span based on terminal aspect ratio AND local latitude scaling
+    let cos_lat = obs_lat.to_radians().cos().max(0.1);
     let x_span = (y_span * r) / cos_lat;
 
     let x_bounds = [obs_lon - x_span / 2.0, obs_lon + x_span / 2.0];
@@ -78,22 +115,62 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
 
             ctx.draw(&Points {
                 coords: &map_points,
-                color: Color::DarkGray, // Dim dot for non-overhead
+                color: Color::DarkGray,
             });
 
-            ctx.draw(&Points { coords: &leo_points, color: Color::Cyan });
-            ctx.draw(&Points { coords: &meo_points, color: Color::Yellow });
-            ctx.draw(&Points { coords: &geo_points, color: Color::Magenta });
-            ctx.draw(&Points { coords: &heo_points, color: Color::Red });
+            ctx.draw(&Points {
+                coords: &leo_points,
+                color: Color::Cyan,
+            });
+            ctx.draw(&Points {
+                coords: &meo_points,
+                color: Color::Yellow,
+            });
+            ctx.draw(&Points {
+                coords: &geo_points,
+                color: Color::Magenta,
+            });
+            ctx.draw(&Points {
+                coords: &heo_points,
+                color: Color::Red,
+            });
 
             // Draw observer
-            ctx.print(obs_lon, obs_lat, Span::styled("⊕", Style::default().fg(Color::White).bg(Color::Red).add_modifier(Modifier::BOLD)));
+            ctx.print(
+                obs_lon,
+                obs_lat,
+                Span::styled(
+                    "⊕",
+                    Style::default()
+                        .fg(Color::White)
+                        .bg(Color::Red)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            );
+
+            // Draw space stations with labels
+            let station_style = Style::default()
+                .fg(Color::LightGreen)
+                .add_modifier(Modifier::BOLD);
+            for &(lon, lat, label) in &station_points {
+                ctx.print(lon, lat, Span::styled("◆", station_style));
+                ctx.print(lon + 1.5, lat, Span::styled(label, station_style));
+            }
 
             // Highlight selected satellite
             if let Some(idx) = app.selected_overhead_idx
                 && let Some(state) = app.sat_states.get(idx)
             {
-                ctx.print(state.geodetic.lon, state.geodetic.lat, Span::styled("●", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
+                ctx.print(
+                    state.geodetic.lon,
+                    state.geodetic.lat,
+                    Span::styled(
+                        "●",
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                );
             }
         });
 
@@ -103,10 +180,17 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     let mut sidebar_text = vec![];
     if let Some(idx) = app.selected_overhead_idx {
         if let Some(state) = app.sat_states.get(idx) {
-            let sat_color = if state.geodetic.alt < 2000.0 { Color::Cyan }
-                else if state.geodetic.alt < 35000.0 { Color::Yellow }
-                else if state.geodetic.alt < 37000.0 { Color::Magenta }
-                else { Color::Red };
+            let sat_color = if is_space_station(&state.name) {
+                Color::LightGreen
+            } else if state.geodetic.alt < 2000.0 {
+                Color::Cyan
+            } else if state.geodetic.alt < 35000.0 {
+                Color::Yellow
+            } else if state.geodetic.alt < 37000.0 {
+                Color::Magenta
+            } else {
+                Color::Red
+            };
 
             sidebar_text.push(Line::from(Span::styled(
                 state.name.clone(),
@@ -117,14 +201,20 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
             sidebar_text.push(Line::from(format!("Az:  {:.1}°", state.az)));
             sidebar_text.push(Line::from(format!("El:  {:.1}°", state.el)));
             sidebar_text.push(Line::from(format!("Rng: {:.1} km", state.range)));
-            
-            let vel_mag = (state.eci_vel[0].powi(2) + state.eci_vel[1].powi(2) + state.eci_vel[2].powi(2)).sqrt();
+
+            let vel_mag = (state.eci_vel[0].powi(2)
+                + state.eci_vel[1].powi(2)
+                + state.eci_vel[2].powi(2))
+            .sqrt();
             sidebar_text.push(Line::from(format!("Vel: {:.2} km/s", vel_mag)));
         }
     } else {
-        sidebar_text.push(Line::from(Span::styled("No satellite selected.", Style::default().fg(Color::DarkGray))));
+        sidebar_text.push(Line::from(Span::styled(
+            "No satellite selected.",
+            Style::default().fg(Color::DarkGray),
+        )));
         sidebar_text.push(Line::from(""));
-        sidebar_text.push(Line::from("Use Right/Left arrow keys"));
+        sidebar_text.push(Line::from("Use arrow keys"));
         sidebar_text.push(Line::from("to cycle overhead satellites."));
     }
 

@@ -98,23 +98,33 @@ impl App {
             return;
         }
 
-        // Choose coordinate space based on the current view.
-        // Overhead view:  (lon, lat) —   ground-track positions
-        // Sky view:       (az, el) —     sky positions (azimuth wraps at 360°)
-        let use_azel = self.current_view == crate::views::View::Sky;
+        // Compute screen-space coordinates for the current selection and all
+        // candidates so that arrow keys always navigate relative to what the
+        // user sees on screen.
+        //
+        // Overhead view (equirectangular):  screen ≈ (lon, lat)
+        // Sky view (polar):                 screen = (r·sin(az), r·cos(az))  r=1−el/90
+        let is_sky = self.current_view == crate::views::View::Sky;
+
+        let to_screen = |state: &crate::satellite::propagate::SatState| -> (f64, f64) {
+            if is_sky {
+                let r = 1.0 - state.el / 90.0;
+                let a = state.az.to_radians();
+                (r * a.sin(), r * a.cos())
+            } else {
+                (state.geodetic.lon, state.geodetic.lat)
+            }
+        };
 
         let (cx, cy) = if let Some(idx) = self.selected_overhead_idx
             && let Some(state) = self.sat_states.get(idx)
         {
-            if use_azel {
-                (state.az, state.el)
-            } else {
-                (state.geodetic.lon, state.geodetic.lat)
-            }
-        } else if use_azel {
-            // Nothing selected in sky view — anchor at the first overhead sat
+            to_screen(state)
+        } else if is_sky {
+            // Nothing selected — pick the first overhead satellite
             let first = &self.sat_states[overhead_indices[0]];
-            (first.az, first.el)
+            self.selected_overhead_idx = Some(overhead_indices[0]);
+            to_screen(first)
         } else {
             (self.config.lon, self.config.lat)
         };
@@ -130,29 +140,20 @@ impl App {
         for &idx in &overhead_indices {
             if Some(idx) == self.selected_overhead_idx { continue; }
 
-            let state = &self.sat_states[idx];
-
-            let (d_x, d_y) = if use_azel {
-                // Azimuth wraps at 360° — normalise delta to [-180, 180]
-                let raw = state.az - cx;
-                let d_az = ((raw + 540.0) % 360.0) - 180.0;
-                let d_el = state.el - cy;
-                (d_az, d_el)
-            } else {
-                (state.geodetic.lon - cx, state.geodetic.lat - cy)
-            };
-
+            let (sx, sy) = to_screen(&self.sat_states[idx]);
+            let d_x = sx - cx;
+            let d_y = sy - cy;
             let dist = (d_x * d_x + d_y * d_y).sqrt();
             if dist < 1e-9 { continue; }
 
-            // Unit vector from current position toward the candidate
+            // Unit vector from current screen position toward the candidate
             let to_x = d_x / dist;
             let to_y = d_y / dist;
 
             // Alignment: dot product of the two unit vectors ∈ [-1, 1]
             let alignment = to_x * dx_u + to_y * dy_u;
 
-            // Only consider satellites in the forward hemisphere
+            // Only consider satellites in the forward screen-direction
             if alignment > 0.0 {
                 // Balance alignment with distance:
                 //   score = dist × (3 - 2 × alignment)

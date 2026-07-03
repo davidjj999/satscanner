@@ -1,0 +1,12 @@
+# Observer location for satellite tracking.
+# All angles are in degrees, altitude in meters above sea level.
+lat = 0.0
+lon = 0.0
+alt = 0.0
+location_name = "Null Island"
+
+# Example: San Francisco
+# lat = 37.7749
+# lon = -122.4194
+# alt = 10.0
+# location_name = "San Francisco"

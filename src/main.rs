@@ -9,6 +9,7 @@ use std::{io, panic, time::Duration};
 
 mod app;
 mod config;
+mod log;
 mod satellite;
 mod ui;
 mod views;
@@ -17,8 +18,14 @@ use app::App;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Setup tracing
-    tracing_subscriber::fmt::init();
+    // Setup logging: in-memory ring buffer + rolling file
+    let shared_log = log::SharedLog::new();
+    let log_file = log::SharedLogFile::new("satscanner.log");
+    let make_writer = log::LogMakeWriter::new(shared_log.clone()).with_file(log_file);
+    tracing_subscriber::fmt()
+        .with_writer(make_writer)
+        .with_ansi(false)
+        .init();
 
     // Setup terminal
     enable_raw_mode()?;
@@ -36,7 +43,7 @@ async fn main() -> Result<()> {
     }));
 
     // Initialize the app
-    let mut app = App::new();
+    let mut app = App::new(shared_log);
     
     // Trigger startup task (e.g., fetch TLEs)
     app.init();
@@ -52,21 +59,30 @@ async fn main() -> Result<()> {
             .checked_sub(last_tick.elapsed())
             .unwrap_or_else(|| Duration::from_secs(0));
 
-        if crossterm::event::poll(timeout)? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Char('q') => break,
-                        KeyCode::Esc => break,
-                        KeyCode::Char('c') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => break,
-                        KeyCode::Char('1') => app.set_view(views::View::Overhead),
-                        KeyCode::Char('2') => app.set_view(views::View::GlobeScale),
-                        KeyCode::Char('3') => app.set_view(views::View::GlobeBands),
-                        KeyCode::Right => app.navigate_spatial(1.0, 0.0),
-                        KeyCode::Left => app.navigate_spatial(-1.0, 0.0),
-                        KeyCode::Up => app.navigate_spatial(0.0, 1.0),
-                        KeyCode::Down => app.navigate_spatial(0.0, -1.0),
-                        _ => {}
+        if crossterm::event::poll(timeout)?
+            && let Event::Key(key) = event::read()?
+            && key.kind == KeyEventKind::Press
+        {
+            match key.code {
+                KeyCode::Char('q') => break,
+                KeyCode::Esc => break,
+                KeyCode::Char('c') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => break,
+                KeyCode::Char('1') => app.set_view(views::View::Overhead),
+                KeyCode::Char('2') => app.set_view(views::View::GlobeScale),
+                KeyCode::Char('3') => app.set_view(views::View::GlobeBands),
+                KeyCode::Char('+') | KeyCode::Char('=') => app.zoom_in(),
+                KeyCode::Char('-') | KeyCode::Char('_') => app.zoom_out(),
+                KeyCode::Right => app.navigate_spatial(1.0, 0.0),
+                KeyCode::Left => app.navigate_spatial(-1.0, 0.0),
+                KeyCode::Up => app.navigate_spatial(0.0, 1.0),
+                KeyCode::Down => app.navigate_spatial(0.0, -1.0),
+                KeyCode::Char('?') => app.toggle_help(),
+                KeyCode::Char('l') => app.toggle_log(),
+                _ => {
+                    if app.show_help {
+                        app.toggle_help();
+                    } else if app.show_log {
+                        app.toggle_log();
                     }
                 }
             }

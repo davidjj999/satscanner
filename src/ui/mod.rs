@@ -1,3 +1,5 @@
+pub mod help;
+pub mod log_panel;
 pub mod widgets;
 
 use crate::app::App;
@@ -20,4 +22,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 
     widgets::draw_status_bar(f, app, chunks[1]);
+
+    // Render help overlay on top if active
+    if app.show_help {
+        help::draw_help_overlay(f, f.size());
+    }
+
+    // Render log panel on top if active
+    if app.show_log {
+        log_panel::draw_log_panel(f, f.size(), &app.log);
+    }
 }

@@ -89,11 +89,6 @@ pub fn ecef_to_geodetic(ecef: [f64; 3]) -> Geodetic {
     }
 }
 
-pub fn eci_to_geodetic(eci: [f64; 3], time: &DateTime<Utc>) -> Geodetic {
-    let ecef = eci_to_ecef(eci, time);
-    ecef_to_geodetic(ecef)
-}
-
 pub fn observer_look_angle(obs: Geodetic, sat_ecef: [f64; 3]) -> (f64, f64, f64) {
     let lat = obs.lat.to_radians();
     let lon = obs.lon.to_radians();

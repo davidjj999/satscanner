@@ -8,7 +8,9 @@ use tracing::{info, warn};
 #[derive(Debug, Clone)]
 pub struct Tle {
     pub name: String,
+    #[allow(dead_code)]
     pub line1: String,
+    #[allow(dead_code)]
     pub line2: String,
     pub elements: Elements,
 }
@@ -23,16 +25,13 @@ pub async fn fetch_tles() -> Result<Vec<Tle>> {
     let url = "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle";
 
     let mut use_cache = false;
-    if cache_file.exists() {
-        if let Ok(metadata) = fs::metadata(&cache_file) {
-            if let Ok(modified) = metadata.modified() {
-                if let Ok(age) = SystemTime::now().duration_since(modified) {
-                    if age < Duration::from_secs(2 * 3600) {
-                        use_cache = true;
-                    }
-                }
-            }
-        }
+    if cache_file.exists()
+        && let Ok(metadata) = fs::metadata(&cache_file)
+        && let Ok(modified) = metadata.modified()
+        && let Ok(age) = SystemTime::now().duration_since(modified)
+        && age < Duration::from_secs(2 * 3600)
+    {
+        use_cache = true;
     }
 
     let content = if use_cache {
@@ -96,12 +95,13 @@ mod tests {
 
     #[test]
     fn test_parse_tles() {
-        let sample = "ISS (ZARYA)             \n\
-                      1 25544U 98067A   23272.53181822  .00016717  00000-0  30129-3 0  9997\n\
-                      2 25544  51.6416 288.6677 0006059  58.9416  60.5484 15.49887754418047";
+        // Valid TLE sample (CALSPHERE 1 from Celestrak)
+        let sample = "CALSPHERE 1\n\
+                      1 00900U 64063C   26183.64242862  .00000615  00000+0  61698-3 0  9996\n\
+                      2 00900  90.2223  72.1341 0023176 245.7721 146.4627 13.76639869 73552";
         let tles = parse_tles(sample);
         assert_eq!(tles.len(), 1);
-        assert_eq!(tles[0].name, "ISS (ZARYA)");
-        assert_eq!(tles[0].elements.object_name, Some("ISS (ZARYA)".to_string()));
+        assert_eq!(tles[0].name, "CALSPHERE 1");
+        assert_eq!(tles[0].elements.norad_id, 900);
     }
 }

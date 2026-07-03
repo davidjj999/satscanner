@@ -19,7 +19,7 @@ pub fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
         "Data Ready"
     };
 
-    let text = format!(" View: {} | Status: {} | Sats: {} ", view_name, tle_status, app.loaded_tles);
+    let text = format!(" Location: {} | View: {} | Status: {} | Sats: {} ", app.config.location_name, view_name, tle_status, app.loaded_tles);
 
     let paragraph = Paragraph::new(text)
         .block(Block::default().borders(Borders::ALL))

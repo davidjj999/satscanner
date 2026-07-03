@@ -27,13 +27,18 @@ A terminal-based satellite tracking application written in Rust, featuring three
 ## Architecture
 
 ```
-orbitui/
+satscanner/
 ├── Cargo.toml
-├── config.toml              # User location, refresh interval, display prefs
+├── config.toml              # User location (git-ignored)
+├── config.toml.example      # Example config file
+├── satscanner.log           # Rolling debug log (git-ignored)
+├── cache/
+│   └── tle_active.txt       # Cached TLE data
 ├── src/
 │   ├── main.rs              # Entry point, terminal setup, event loop
 │   ├── app.rs               # App state machine, view routing, tick logic
 │   ├── config.rs            # Config loading and defaults
+│   ├── log.rs               # In-memory ring buffer + rolling file log (tracing)
 │   │
 │   ├── satellite/
 │   │   ├── mod.rs
@@ -42,24 +47,21 @@ orbitui/
 │   │   └── coords.rs        # ECI → ECEF → Geodetic conversions
 │   │
 │   ├── views/
-│   │   ├── mod.rs           # View enum, shared render helpers
+│   │   ├── mod.rs           # View enum
 │   │   ├── overhead.rs      # View 1: 2D equirectangular map
-│   │   ├── globe_scale.rs   # View 2: Orthographic globe, true altitude
-│   │   └── globe_bands.rs   # View 3: Orthographic globe, log-scaled altitude
+│   │   ├── globe_scale.rs   # View 2: Orthographic globe, true altitude (stub)
+│   │   └── globe_bands.rs   # View 3: Orthographic globe, log-scaled altitude (stub)
 │   │
 │   └── ui/
-│       ├── mod.rs
-│       ├── canvas.rs        # Braille canvas drawing primitives
-│       ├── projection.rs    # Orthographic, equirectangular projection math
-│       ├── colors.rs        # Satellite type → color mapping
-│       └── widgets.rs       # Info sidebar, status bar, keybind overlay
+│       ├── mod.rs           # Top-level draw routing
+│       ├── widgets.rs       # Status bar, info sidebar
+│       ├── help.rs          # Help overlay popup (? key)
+│       └── log_panel.rs     # In-app log viewer overlay (l key)
 ```
 
 ---
 
 ## Phases
-
----
 
 ### Phase 1 — Project Skeleton & Terminal Setup [COMPLETED]
 **Estimated time: 2–3 days**
@@ -67,7 +69,7 @@ orbitui/
 Stand up the Rust project with all dependencies declared, get a blank TUI rendering with a proper event loop, and confirm clean teardown on exit.
 
 **Tasks:**
-- `cargo new orbitui` and populate `Cargo.toml` with all required dependencies
+- `cargo new satscanner` and populate `Cargo.toml` with all required dependencies
 - Implement terminal initialization: raw mode, alternate screen, panic hook that restores terminal
 - Main loop: render tick (configurable FPS) + input event polling using `crossterm`
 - Implement graceful exit on `q` / `Ctrl+C`
@@ -75,13 +77,6 @@ Stand up the Rust project with all dependencies declared, get a blank TUI render
 - Implement view switching on `1`, `2`, `3` keypresses
 - Render a basic status bar (current view name, time, placeholder satellite count)
 - Handle terminal resize events (redraw on `SIGWINCH` / crossterm resize event)
-
-**Crates:**
-```toml
-ratatui = "0.27"
-crossterm = "0.27"
-tokio = { version = "1", features = ["full"] }
-```
 
 **Exit criteria:** App launches, shows placeholder views, switches between them, exits cleanly.
 
@@ -98,12 +93,7 @@ Allow the user to specify their observer location, which drives the overhead vie
 - Fall back to hardcoded defaults (0.0, 0.0) if no config found
 - Expose config to all views via app state
 - Document config file format in `README.md`
-
-**Crates:**
-```toml
-serde = { version = "1", features = ["derive"] }
-toml = "0.8"
-```
+- Provide `config.toml.example` with commented defaults
 
 ---
 
@@ -114,30 +104,13 @@ Fetch Two-Line Element sets from Celestrak, parse them, and cache them locally s
 
 **Tasks:**
 - Define `Tle` struct mirroring SGP4 input requirements
-- HTTP fetch from Celestrak endpoints (active satellites, Starlink, GPS, ISS as initial sets)
-  - `https://celestrak.org/SOCRATES/query.php` for active satellites
-  - `https://celestrak.org/SOCRATES/` group URLs for curated sets
-- Parse raw 3-line TLE text format into `Tle` structs
-- Write parsed TLEs to a local cache file (`~/.cache/orbitui/tle_<group>.txt`)
+- HTTP fetch from Celestrak (active satellite group)
+- Parse raw 3-line TLE text format into `Tle` structs using `sgp4::Elements::from_tle`
+- Write parsed TLEs to a local cache file (`cache/tle_active.txt`)
 - Cache invalidation: re-fetch if cache is older than 2 hours
-- Async fetch using `reqwest` + `tokio`; show "Fetching TLE data..." spinner on first run
-- Error handling: if fetch fails and cache exists, use stale cache with warning; if no cache, exit with message
-
-**Crates:**
-```toml
-reqwest = { version = "0.12", features = ["rustls-tls"] }
-chrono = { version = "0.4", features = ["serde"] }
-dirs = "5"
-```
-
-**TLE sources:**
-| Group | URL |
-|---|---|
-| Active satellites | `https://celestrak.org/SOCRATES/` |
-| ISS | `https://celestrak.org/satcat/tle.php?CATNR=25544` |
-| GPS | `https://celestrak.org/gnss/gps/` |
-| Starlink | `https://celestrak.org/satcat/tle.php?GROUP=starlink` |
-| Weather | `https://celestrak.org/weather/` |
+- Async fetch using `reqwest` + `tokio`; show "Fetching TLE data..." in status bar
+- Error handling: if fetch fails and cache exists, use stale cache with warning; if no cache, exit with error
+- **Data delivery:** TLEs sent from async task to main loop via `tokio::sync::oneshot`
 
 ---
 
@@ -150,26 +123,21 @@ The core computational engine. Given a TLE and a timestamp, produce a lat/lon/al
 
 **4a — SGP4 Propagation:** [COMPLETED]
 - Integrate the `sgp4` crate
-- Implement `propagate_all(tles: &[Tle], time: DateTime<Utc>) -> Vec<SatState>` where `SatState` holds ECI position + velocity
+- Implement `propagate_all(tles: &[Tle], time: DateTime<Utc>) -> Vec<SatState>`
 - Batch over all loaded TLEs each tick (target <16ms for up to 2000 satellites)
 - Handle propagation errors gracefully (skip satellites with bad TLEs)
+- Epoch read from `Elements.datetime` (not manually parsed from TLE text)
 
 **4b — Coordinate Conversions:** [COMPLETED]
-- ECI (km) → ECEF (km): requires Greenwich Sidereal Time (GST) rotation matrix
+- ECI (km) → ECEF (km): Greenwich Sidereal Time rotation matrix
   - GST formula: Julian Date → GMST → add Earth rotation since J2000
-- ECEF (km) → Geodetic (lat, lon, alt):
-  - Use iterative Bowring method or Zhu's closed-form for WGS84
-- Expose `eci_to_geodetic(pos: Vec3, time: DateTime<Utc>) -> Geodetic`
+- ECEF (km) → Geodetic (lat, lon, alt): Zhu's closed-form solution for WGS84
+- Expose `ecef_to_geodetic(pos: [f64;3]) -> Geodetic`
 
 **4c — Observer Geometry:** [COMPLETED]
 - Compute azimuth/elevation from observer location to each satellite
 - Flag satellites with elevation > 0° as "overhead" (visible from user's location)
-- Compute range (km) and Doppler-corrected velocity for sidebar display
-
-**Crates:**
-```toml
-sgp4 = "2"
-```
+- Compute range (km) and velocity for sidebar display
 
 **Exit criteria:** ISS position printed to terminal matches Heavens-Above within ~10 km.
 
@@ -184,13 +152,16 @@ A 2D equirectangular world map showing all satellites as dots, with the observer
 - Use ratatui's built-in `Map` widget as the base layer (renders world coastlines) [COMPLETED]
 - Project each satellite's (lat, lon) onto canvas (x, y) using equirectangular mapping [COMPLETED]
 - Render all satellites as dim dots; overhead satellites (el > 0°) as bright colored dots [COMPLETED]
-- Mark observer location with a distinct symbol (e.g., `⊕`) [COMPLETED]
-- Zoom map to observer's location with aspect ratio correction [COMPLETED]
-- Spatial navigation: arrow keys move selection to the nearest satellite in that direction [COMPLETED]
-- Sidebar panel: selected satellite details (name, NORAD ID, alt km, az/el, range, velocity) [COMPLETED]
+- Mark observer location with a distinct symbol (`⊕`) [COMPLETED]
+- Zoom map to observer's location with aspect ratio correction and equatorial cosine compensation [COMPLETED]
+- Spatial navigation: arrow keys move selection to nearest satellite in that direction [COMPLETED]
+  - Uses unit-vector alignment scoring: `score = dist × (3 − 2 × alignment)`
+  - Prefers nearby satellites, penalizes off-axis direction
+- Sidebar panel: selected satellite details (name, alt km, az/el, range, velocity) [COMPLETED]
 - Color-code by satellite type: LEO=cyan, MEO=yellow, GEO=magenta, HEO=red [COMPLETED]
-- Support `+` / `-` keys to filter by satellite group [PENDING]
+- Support `+` / `-` keys to zoom in/out [COMPLETED]
 - Show satellite count in status bar [COMPLETED]
+- Selected satellite excluded from Points layers to avoid sub-character rendering drift [COMPLETED]
 
 **Rendering approach:**
 ```
@@ -220,7 +191,7 @@ An orthographic globe projection showing Earth and satellite orbits at true scal
 - Animate: globe rotates 0.25°/tick in play mode; `Space` toggles play/pause
 - Sidebar: same satellite detail panel as View 1
 
-**Coastline data:** Embed Natural Earth 110m coastline as a `&[(f32, f32)]` array generated at build time via a build script from the GeoJSON source. Compressed it is ~50 KB.
+**Coastline data:** Embed Natural Earth 110m coastline as a `&[(f32, f32)]` array generated at build time via a build script from the GeoJSON source (~50 KB compressed).
 
 ---
 
@@ -231,7 +202,7 @@ Same orthographic globe but with altitude scaled logarithmically so LEO, MEO, an
 
 **Tasks:**
 - Reuse View 2 projection infrastructure with a pluggable radial scale function
-- Implement log-scale: `r_screen = R_earth + scale_factor * log2(1 + alt_km / 1000.0)`
+- Implement log-scale: `r_screen = R_earth + scale_factor × log2(1 + alt_km / 1000.0)`
 - Draw labeled altitude band rings:
   - LEO band: 160–2000 km
   - MEO band: 2000–35,786 km  
@@ -248,33 +219,37 @@ Same orthographic globe but with altitude scaled logarithmically so LEO, MEO, an
 ### Phase 8 — Polish & Performance
 **Estimated time: 2–3 days**
 
-**Performance:**
-- Profile propagation loop; ensure <16ms for 2000 satellites on a modern machine
-- Move TLE fetch and propagation to background tokio tasks; send updates to render thread via `tokio::sync::watch`
-- Cache projected positions per frame; only recompute when time advances or view rotates
-- Coastline projection cache keyed on camera angle (invalidate on rotation)
+**Tasks completed:**
+- [x] Help overlay (`?` key shows keybind reference and color legend)
+- [x] `config.toml.example` shipped with the repo
+- [x] Rolling file log (`satscanner.log`, 1 MB auto-rotation, one backup kept)
+- [x] In-app log viewer (`l` key), captures all `tracing` output
+- [x] TLE delivery uses `tokio::sync::oneshot` (correct single-message semantics)
+- [x] Fixed spatial navigation scoring to balance alignment with distance
+- [x] Selected satellite excluded from Points layers to fix sub-character rendering drift
+- [x] `cargo clippy` passes cleanly with `-D warnings`
+- [x] All unused-code warnings resolved with `#[allow(dead_code)]` where intentional
+- [x] Collapsible-if lints resolved with Rust 2024 let-chains
 
-**Polish:**
-- Startup screen: show progress bar while fetching TLEs
-- Help overlay: `?` key shows keybind reference
-- Error toast: non-fatal errors (stale TLE, fetch failure) shown in status bar for 3 seconds
-- Config reload: `R` reloads config and re-fetches TLEs
-- Graceful degradation: if terminal is too small (<80×24), show a "Terminal too small" message
-- Mouse support (optional): click to select satellite
-
-**Testing:**
-- Unit tests for coordinate conversion (compare against known ephemeris values)
-- Unit tests for TLE parsing (use sample TLEs from Celestrak docs)
-- Integration test: propagate ISS TLE, assert position within 50 km of reference
+**Tasks remaining:**
+- [ ] Profile propagation loop; ensure <16ms for 2000 satellites
+- [ ] Cache projected positions per frame
+- [ ] Startup screen: progress bar while fetching TLEs
+- [ ] Error toast in status bar for 3 seconds
+- [ ] Config reload (`R` key)
+- [ ] Graceful degradation if terminal too small (<80×24)
+- [ ] Mouse support (click to select satellite)
+- [ ] Unit tests for coordinate conversion
+- [ ] More TLE parsing test coverage
+- [ ] Integration test: propagate ISS TLE within 50 km of reference
 
 ---
 
 ### Phase 9 — Packaging & Documentation
 **Estimated time: 1–2 days**
 
-- `README.md`: installation, config file format, keybind reference, screenshot/demo GIF
+- `README.md`: installation, config file format, keybind reference, screenshot/demo GIF [DONE]
 - `CHANGELOG.md`
-- `config.toml.example`
 - GitHub Actions CI: `cargo build`, `cargo test`, `cargo clippy` on Linux/macOS/Windows
 - Cargo release profile: `opt-level = 3`, `lto = true`, `codegen-units = 1`
 - Publish to crates.io (optional)
@@ -285,35 +260,17 @@ Same orthographic globe but with altitude scaled logarithmically so LEO, MEO, an
 
 ```toml
 [dependencies]
-# TUI
 ratatui = "0.27"
 crossterm = "0.27"
-
-# Async runtime
 tokio = { version = "1", features = ["full"] }
-
-# HTTP
 reqwest = { version = "0.12", features = ["rustls-tls", "json"] }
-
-# Orbital mechanics
 sgp4 = "2"
-
-# Time
 chrono = { version = "0.4", features = ["serde"] }
-
-# Config / serialization
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
-
-# Filesystem / paths
-dirs = "5"
-
-# Logging
+anyhow = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-[dev-dependencies]
-approx = "0.5"   # floating point assertions in coord tests
 ```
 
 ---
@@ -322,48 +279,33 @@ approx = "0.5"   # floating point assertions in coord tests
 
 ### Equirectangular Projection (View 1)
 ```
-x = (lon + 180) / 360 * canvas_width
-y = (90 - lat) / 180 * canvas_height
+x = (lon + 180) / 360 × canvas_width
+y = (90 − lat) / 180 × canvas_height
 ```
 
 ### Orthographic Projection (Views 2 & 3)
 ```
-# Convert geodetic to ECEF unit sphere
-X = cos(lat) * cos(lon)
-Y = cos(lat) * sin(lon)
+X = cos(lat) × cos(lon)
+Y = cos(lat) × sin(lon)
 Z = sin(lat)
 
-# Scale by radial distance (true or log-scaled)
-r = (R_earth + alt_km) / R_earth   # normalized, or log-scaled for View 3
-P = r * (X, Y, Z)
+r = (R_earth + alt_km) / R_earth    # normalized, or log-scaled for View 3
+P = r × (X, Y, Z)
 
-# Rotate by camera (azimuth φ, elevation θ)
-P' = Ry(θ) * Rz(φ) * P
+P' = Ry(θ) × Rz(φ) × P              # camera rotation
 
-# Project to screen (orthographic: just drop Z)
-screen_x = P'.x * scale + cx
-screen_y = -P'.y * scale + cy   # y-flip for screen coords
-
-# Occlusion: skip if P'.z < 0
+screen_x = P'.x × scale + cx
+screen_y = −P'.y × scale + cy        # y-flip
 ```
 
-### ECI → Geodetic Conversion
+### Spatial Navigation Scoring (View 1)
 ```
-# 1. Compute Greenwich Mean Sidereal Time
-JD = julian_date(utc_time)
-T = (JD - 2451545.0) / 36525.0
-GMST_deg = 280.46061837 + 360.98564736629 * (JD - 2451545.0)
-             + 0.000387933 * T^2 - T^3 / 38710000.0
-
-# 2. ECI → ECEF (rotate by -GMST around Z axis)
-x_ecef =  x_eci * cos(GMST) + y_eci * sin(GMST)
-y_ecef = -x_eci * sin(GMST) + y_eci * cos(GMST)
-z_ecef =  z_eci
-
-# 3. ECEF → Geodetic (Zhu closed-form for WGS84)
-# See: Zhu, J. (1994). Conversion of Earth-centered Earth-fixed coordinates
-#      to geodetic coordinates. IEEE Transactions on Aerospace and Electronic Systems.
+alignment = to_lon × dx_u + to_lat × dy_u   # unit-vector dot product
+score     = dist × (3.0 − 2.0 × alignment)  # lower = better
 ```
+Perfectly aligned (alignment = 1):  `score = dist × 1.0`
+60° off (alignment = 0.5):          `score = dist × 2.0`
+90° off (alignment = 0):            `score = dist × 3.0`
 
 ---
 
@@ -388,7 +330,7 @@ z_ecef =  z_eci
 | M4 — Views 2 & 3 | 6–7 | [IN PROGRESS] Globe views with rotation controls |
 | M5 — Ship | 8–9 | Polished, documented, CI passing |
 
-**Total estimated time: 18–26 days** of focused development, assuming familiarity with Rust but not with orbital mechanics or TUI frameworks.
+**Total estimated time:** 18–26 days of focused development.
 
 ---
 
@@ -398,6 +340,6 @@ z_ecef =  z_eci
 |---|---|---|
 | SGP4 coordinate errors are subtle and hard to spot | Medium | Validate against Heavens-Above for ISS early in Phase 4 |
 | Braille canvas resolution too low for globe detail | Low | Test on 220×50 canvas early; coastline LOD is adjustable |
-| Celestrak rate-limits aggressive fetchers | Low | Cache aggressively; add `User-Agent` header; respect 2hr TTL |
+| Celestrak rate-limits aggressive fetchers | Low | Cache aggressively; respect 2hr TTL |
 | Terminal rendering differs across platforms | Medium | Test on macOS Terminal, iTerm2, Windows Terminal, GNOME Terminal |
 | Propagating 5000+ Starlink sats causes lag | Medium | Profile early; consider spatial culling (only propagate within view frustum) |

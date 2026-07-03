@@ -19,13 +19,19 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     let map_area = chunks[0];
     let sidebar_area = chunks[1];
 
+    let selected_idx = app.selected_overhead_idx;
+
     let mut map_points: Vec<(f64, f64)> = Vec::new();
     let mut leo_points: Vec<(f64, f64)> = Vec::new();
     let mut meo_points: Vec<(f64, f64)> = Vec::new();
     let mut geo_points: Vec<(f64, f64)> = Vec::new();
     let mut heo_points: Vec<(f64, f64)> = Vec::new();
 
-    for state in &app.sat_states {
+    for (i, state) in app.sat_states.iter().enumerate() {
+        // Skip the selected satellite — it is drawn as the ● highlight instead
+        // to avoid sub-character misalignment between Points (braille) and print().
+        if Some(i) == selected_idx { continue; }
+
         if state.el > 0.0 {
             if state.geodetic.alt < 2000.0 {
                 leo_points.push((state.geodetic.lon, state.geodetic.lat));
@@ -50,9 +56,8 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     let dot_height = map_area.height.saturating_sub(2) as f64 * 4.0;
     let r = if dot_height > 0.0 { dot_width / dot_height } else { 2.0 };
 
-    // Set a fixed latitude span (e.g. 60 degrees = +/- 30 degrees)
-    // This is large enough to see the entire LEO visibility footprint.
-    let y_span = 60.0;
+    // Set latitude span based on user's zoom level
+    let y_span = app.zoom_level;
     
     // Scale X span based on terminal aspect ratio AND local latitude scaling (cos(lat))
     let cos_lat = obs_lat.to_radians().cos().max(0.1); 
@@ -85,10 +90,10 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
             ctx.print(obs_lon, obs_lat, Span::styled("⊕", Style::default().fg(Color::White).bg(Color::Red).add_modifier(Modifier::BOLD)));
 
             // Highlight selected satellite
-            if let Some(idx) = app.selected_overhead_idx {
-                if let Some(state) = app.sat_states.get(idx) {
-                    ctx.print(state.geodetic.lon, state.geodetic.lat, Span::styled("●", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
-                }
+            if let Some(idx) = app.selected_overhead_idx
+                && let Some(state) = app.sat_states.get(idx)
+            {
+                ctx.print(state.geodetic.lon, state.geodetic.lat, Span::styled("●", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
             }
         });
 

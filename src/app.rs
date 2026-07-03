@@ -87,26 +87,37 @@ impl App {
     
     pub fn navigate_spatial(&mut self, dx: f64, dy: f64) {
         // Works in any view that tracks satellite positions
-        
+
         let overhead_indices: Vec<usize> = self.sat_states.iter().enumerate()
             .filter(|(_, s)| s.el > 0.0)
             .map(|(i, _)| i)
             .collect();
-            
+
         if overhead_indices.is_empty() {
             self.selected_overhead_idx = None;
             return;
         }
 
-        let mut current_lon = self.config.lon;
-        let mut current_lat = self.config.lat;
+        // Choose coordinate space based on the current view.
+        // Overhead view:  (lon, lat) —   ground-track positions
+        // Sky view:       (az, el) —     sky positions (azimuth wraps at 360°)
+        let use_azel = self.current_view == crate::views::View::Sky;
 
-        if let Some(idx) = self.selected_overhead_idx
+        let (cx, cy) = if let Some(idx) = self.selected_overhead_idx
             && let Some(state) = self.sat_states.get(idx)
         {
-            current_lon = state.geodetic.lon;
-            current_lat = state.geodetic.lat;
-        }
+            if use_azel {
+                (state.az, state.el)
+            } else {
+                (state.geodetic.lon, state.geodetic.lat)
+            }
+        } else if use_azel {
+            // Nothing selected in sky view — anchor at the first overhead sat
+            let first = &self.sat_states[overhead_indices[0]];
+            (first.az, first.el)
+        } else {
+            (self.config.lon, self.config.lat)
+        };
 
         let mut best_idx = None;
         let mut best_score = f64::INFINITY;
@@ -118,29 +129,33 @@ impl App {
 
         for &idx in &overhead_indices {
             if Some(idx) == self.selected_overhead_idx { continue; }
-            
+
             let state = &self.sat_states[idx];
-            let d_lon = state.geodetic.lon - current_lon;
-            let d_lat = state.geodetic.lat - current_lat;
-            let dist = (d_lon * d_lon + d_lat * d_lat).sqrt();
+
+            let (d_x, d_y) = if use_azel {
+                // Azimuth wraps at 360° — normalise delta to [-180, 180]
+                let raw = state.az - cx;
+                let d_az = ((raw + 540.0) % 360.0) - 180.0;
+                let d_el = state.el - cy;
+                (d_az, d_el)
+            } else {
+                (state.geodetic.lon - cx, state.geodetic.lat - cy)
+            };
+
+            let dist = (d_x * d_x + d_y * d_y).sqrt();
             if dist < 1e-9 { continue; }
 
             // Unit vector from current position toward the candidate
-            let to_lon = d_lon / dist;
-            let to_lat = d_lat / dist;
+            let to_x = d_x / dist;
+            let to_y = d_y / dist;
 
             // Alignment: dot product of the two unit vectors ∈ [-1, 1]
-            let alignment = to_lon * dx_u + to_lat * dy_u;
+            let alignment = to_x * dx_u + to_y * dy_u;
 
             // Only consider satellites in the forward hemisphere
             if alignment > 0.0 {
                 // Balance alignment with distance:
                 //   score = dist × (3 - 2 × alignment)
-                // Perfectly aligned (alignment=1): score = dist × 1   (just distance)
-                // 60° off       (alignment=0.5): score = dist × 2   (2× penalty)
-                // 90° off       (alignment=0):   score = dist × 3   (3× penalty)
-                // This keeps nearby satellites strongly preferred while still
-                // respecting the pressed direction.
                 let penalty = 3.0 - 2.0 * alignment;
                 let score = dist * penalty;
 

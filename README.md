@@ -7,10 +7,11 @@ A terminal-based satellite tracking application written in Rust. It provides rea
 - **Real-time Tracking:** 60 FPS orbital propagation using SGP4.
 - **Interactive Views:**
   - **Overhead Map:** 2D equirectangular map zoomed to your location with spatial navigation.
-  - **Globe Views (Planned):** To-scale 3D globe and altitude-banded globe projections.
+  - **Sky View:** Polar plot of your local sky showing satellites at their true azimuth and elevation. Includes ☀ Sun and ☽ Moon positions, labeled space stations, and elevation rings.
+  - **Orbital Cross-Section (Planned):** Side-on altitude view replacing the altitude-banded globe.
 - **Live Data:** Automatically fetches and caches fresh TLE data from Celestrak.
-- **Spatial Navigation:** Use arrow keys to select satellites based on their physical direction from your current selection.
-- **Color-coded Regimes:** Satellites are categorized by altitude (LEO, MEO, GEO, HEO).
+- **Screen-space Navigation:** Arrow keys always select the nearest satellite in the direction they point on screen, regardless of view projection.
+- **Color-coded Regimes:** Satellites categorized by altitude (LEO, MEO, GEO, HEO). Space stations highlighted in **light green** with labels.
 - **Help Overlay:** Press `?` for a full keybind reference.
 - **Debug Logging:** Press `l` to view live logs; also written to a rolling `satscanner.log` file (1 MB rotation).
 
@@ -56,14 +57,24 @@ cargo run --release
 
 ## Visual Conventions
 
-### Map Symbols
+### Overhead Map Symbols
 - **Green Lines:** World coastlines.
 - **⊕ (White on Red):** Your configured observer location.
 - **● (White Highlight):** Currently selected satellite.
+- **◆ (LightGreen):** Crewed space station (ISS / CSS), with label.
 - **Dim Gray Dots:** Satellites currently below your horizon.
 
-### Satellite Color Coding (Overhead)
-Satellites above your horizon are color-coded by their orbital regime:
+### Sky View Symbols
+- **⊕ (White on Red):** Your location at zenith.
+- **☀ SUN (Yellow):** The Sun's position (when above horizon).
+- **☽ MOON (White):** The Moon's position (when above horizon).
+- **◆ (LightGreen) + label:** Crewed space station at its true az/el.
+- **Elevation rings:** Horizon (outer), 30°, 60°.
+- **Cardinal labels:** N, E, S, W at the sky circle edge.
+
+### Satellite Color Coding (both views)
+Satellites above your horizon are color-coded by orbital regime:
+- **LightGreen (◆):** Crewed space stations (ISS, Tiangong/CSS)
 - **Cyan:** LEO (Low Earth Orbit, < 2,000 km)
 - **Yellow:** MEO (Medium Earth Orbit, < 35,000 km)
 - **Magenta:** GEO (Geostationary Orbit, ~36,000 km)
@@ -74,8 +85,8 @@ Satellites above your horizon are color-coded by their orbital regime:
 | Key | Action |
 |---|---|
 | `q`, `Esc`, `Ctrl+C` | Exit |
-| `1` / `2` / `3` | Switch views (Overhead / Globe Scale / Globe Bands) |
-| `Arrow Keys` | Navigate between satellites by direction (Overhead view) |
+| `1` / `2` / `3` | Switch views (Overhead / Sky / Bands) |
+| `Arrow Keys` | Navigate satellites by screen position (all views) |
 | `+` / `-` | Zoom in / zoom out (Overhead view) |
 | `?` | Toggle help overlay |
 | `l` | Toggle in-app event log viewer |
@@ -106,14 +117,15 @@ satscanner/
 │   ├── log.rs               # In-memory ring buffer + rolling file log
 │   ├── satellite/
 │   │   ├── mod.rs
-│   │   ├── tle.rs           # TLE fetch, parse, cache
+│   │   ├── coords.rs        # ECI → ECEF → Geodetic conversions
 │   │   ├── propagate.rs     # SGP4 wrapper, batch position compute
-│   │   └── coords.rs        # ECI → ECEF → Geodetic conversions
+│   │   ├── skypos.rs        # Sun and Moon position algorithms
+│   │   └── tle.rs           # TLE fetch, parse, cache
 │   ├── views/
-│   │   ├── mod.rs           # View enum
+│   │   ├── mod.rs           # View enum (Overhead, Sky, GlobeBands)
 │   │   ├── overhead.rs      # 2D equirectangular map
-│   │   ├── globe_scale.rs   # Orthographic globe, true altitude (stub)
-│   │   └── globe_bands.rs   # Orthographic globe, log-scaled altitude (stub)
+│   │   ├── globe_scale.rs   # Sky View (polar az/el plot)
+│   │   └── globe_bands.rs   # Orbital cross-section (stub)
 │   └── ui/
 │       ├── mod.rs           # Top-level draw routing
 │       ├── widgets.rs       # Status bar, info sidebar
@@ -123,14 +135,13 @@ satscanner/
 
 ## Roadmap
 
-- [x] Phase 1: Skeleton & Event Loop
-- [x] Phase 2: Configuration System
+- [x] Phase 1–2: Skeleton, Configuration
 - [x] Phase 3: TLE Data Pipeline
 - [x] Phase 4: Orbital Propagation Engine
 - [x] Phase 5: Overhead Map View
-- [ ] Phase 6: 3D Globe View (To-Scale)
-- [ ] Phase 7: Altitude-Banded Globe View
-- [x] Phase 8: Polish — Help overlay, config.toml.example, rolling log file, in-app log viewer
+- [x] Phase 6: Sky View (polar plot with Sun/Moon, space stations)
+- [ ] Phase 7: Orbital Cross-Section View (altitude-centric)
+- [x] Phase 8: Polish — Help overlay, config.toml.example, rolling log, log viewer, space station highlighting, screen-space navigation
 - [ ] Phase 8: Performance Tuning, CI, packaging
 - [ ] Phase 9: Packaging & Documentation
 

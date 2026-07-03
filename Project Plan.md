@@ -44,13 +44,14 @@ satscanner/
 │   │   ├── mod.rs
 │   │   ├── tle.rs           # TLE fetch, parse, cache (Celestrak HTTP)
 │   │   ├── propagate.rs     # SGP4 wrapper, batch position compute
+│   │   ├── skypos.rs        # Sun & Moon ephemeris (az/el for observer)
 │   │   └── coords.rs        # ECI → ECEF → Geodetic conversions
 │   │
 │   ├── views/
-│   │   ├── mod.rs           # View enum
+│   │   ├── mod.rs           # View enum (Overhead, Sky, GlobeBands)
 │   │   ├── overhead.rs      # View 1: 2D equirectangular map
-│   │   ├── globe_scale.rs   # View 2: Orthographic globe, true altitude (stub)
-│   │   └── globe_bands.rs   # View 3: Orthographic globe, log-scaled altitude (stub)
+│   │   ├── globe_scale.rs   # View 2: Sky View polar plot
+│   │   └── globe_bands.rs   # View 3: Orbital cross-section (stub)
 │   │
 │   └── ui/
 │       ├── mod.rs           # Top-level draw routing
@@ -171,48 +172,47 @@ Map widget for coastlines (layered under satellite points)
 
 ---
 
-### Phase 6 — View 2: To-Scale Globe
+### Phase 6 — View 2: Sky View [COMPLETED]
 **Estimated time: 3–4 days**
 
-An orthographic globe projection showing Earth and satellite orbits at true scale. A GEO satellite appears roughly 6× the Earth's radius from center.
+A polar plot of the observer's local sky — looking up from the ground.
 
 **Tasks:**
-- Implement orthographic projection: `(lat, lon, alt) → (screen_x, screen_y)` with configurable camera azimuth/elevation
-- Draw Earth outline as a circle (radius proportional to terminal canvas size)
-- Render continental outlines by projecting coastline vertex list through orthographic projection (use a bundled low-resolution coastline dataset, e.g., Natural Earth 110m as embedded binary)
-- Render each satellite as a point at its true radial distance from Earth center
-- Draw orbit traces: compute 90-minute track (one orbital period) as a polyline of projected points
-- Occlude satellites behind Earth (dot product with view vector < 0 → skip)
-- Keyboard controls:
-  - `←` `→` — rotate globe longitude
-  - `↑` `↓` — rotate globe latitude (tilt)
-  - `r` — reset to default view (observer-centered)
-  - `f` — toggle orbit trace on/off
-- Animate: globe rotates 0.25°/tick in play mode; `Space` toggles play/pause
-- Sidebar: same satellite detail panel as View 1
+- Polar projection: center = zenith, edge = horizon [COMPLETED]
+- Elevation rings at 0° (horizon), 30°, 60° [COMPLETED]
+- Cardinal direction labels N, E, S, W [COMPLETED]
+- Plot each overhead satellite at its true (az, el) [COMPLETED]
+- Color-code by orbital regime (same as overhead view) [COMPLETED]
+- Observer marker at zenith [COMPLETED]
+- Selected satellite highlight [COMPLETED]
+- Sidebar with satellite details [COMPLETED]
+- Sun position (simplified VSOP87 algorithm, ~0.01° accuracy) [COMPLETED]
+- Moon position (truncated ELP2000-82B / Meeus, ~0.5° accuracy) [COMPLETED]
+- Sun/Moon only shown when above horizon [COMPLETED]
+- Space station detection by name (ISS, Tiangong/CSS) with ◆ + label in light green [COMPLETED]
+- Screen-space arrow key navigation (using polar projection) [COMPLETED]
 
-**Coastline data:** Embed Natural Earth 110m coastline as a `&[(f32, f32)]` array generated at build time via a build script from the GeoJSON source (~50 KB compressed).
+**Ephemeris algorithms (src/satellite/skypos.rs):**
+- Sun: mean anomaly + equation of center → ecliptic longitude → equatorial → horizontal
+- Moon: truncated Meeus with main perturbation terms → ecliptic lat/lon → equatorial → horizontal
+- Shared `equatorial_to_horizontal()` conversion for both bodies
 
 ---
 
-### Phase 7 — View 3: Altitude-Banded Globe
+### Phase 7 — View 3: Orbital Cross-Section
 **Estimated time: 2–3 days**
 
-Same orthographic globe but with altitude scaled logarithmically so LEO, MEO, and GEO satellites are all visible with clear spatial separation.
+A side-on altitude-centric view showing Earth and satellite orbits — replacing the planned altitude-banded globe.
 
 **Tasks:**
-- Reuse View 2 projection infrastructure with a pluggable radial scale function
-- Implement log-scale: `r_screen = R_earth + scale_factor × log2(1 + alt_km / 1000.0)`
-- Draw labeled altitude band rings:
-  - LEO band: 160–2000 km
-  - MEO band: 2000–35,786 km  
-  - GEO ring: 35,786 km (geosynchronous)
-  - HEO: indicate apogee/perigee arc for elliptical orbits
-- Render band labels on the right edge of the globe: "LEO", "MEO", "GEO"
-- Shade bands with subtle background fill (using braille density patterns)
-- All View 2 rotation controls apply here
-- Add `[` `]` keys to adjust the log scale exponent interactively
-- Color dots by altitude regime rather than satellite type in this view
+- Vertical layout: Earth at bottom, altitude scale on left edge
+- Draw Earth as a shaded rectangle/circle at the bottom
+- Plot each overhead satellite at its true altitude (y-axis) vs. azimuth range (x-axis)
+- Show altitude band markers (LEO up to 2,000 km, MEO up to 35,000 km, GEO at ~36,000 km)
+- Label band regions on the altitude scale
+- Option for log-scale to compress the GEO band vs. LEO band
+- Selected satellite highlight and sidebar info
+- Arrow key navigation by screen position
 
 ---
 
@@ -230,10 +230,15 @@ Same orthographic globe but with altitude scaled logarithmically so LEO, MEO, an
 - [x] `cargo clippy` passes cleanly with `-D warnings`
 - [x] All unused-code warnings resolved with `#[allow(dead_code)]` where intentional
 - [x] Collapsible-if lints resolved with Rust 2024 let-chains
+- [x] Screen-space navigation in both views (arrow keys always select what's
+      visually left/right/up/down on screen)
+- [x] Space station detection by name (ISS, Tiangong/CSS) with unique color
+      and labels in both views
 
 **Tasks remaining:**
 - [ ] Profile propagation loop; ensure <16ms for 2000 satellites
 - [ ] Cache projected positions per frame
+- [ ] Orientation labels on elevation rings (e.g., horizon elevation ticks)
 - [ ] Startup screen: progress bar while fetching TLEs
 - [ ] Error toast in status bar for 3 seconds
 - [ ] Config reload (`R` key)
@@ -326,9 +331,10 @@ Perfectly aligned (alignment = 1):  `score = dist × 1.0`
 |---|---|---|
 | M1 — Skeleton | 1–2 | [DONE] App boots, switches views, reads config |
 | M2 — Data | 3–4 | [DONE] Live satellite data fetched and propagated via SGP4 |
-| M3 — View 1 | 5 | [DONE] Overhead map working end-to-end with spatial navigation |
-| M4 — Views 2 & 3 | 6–7 | [IN PROGRESS] Globe views with rotation controls |
-| M5 — Ship | 8–9 | Polished, documented, CI passing |
+| M3 — View 1 | 5 | [DONE] Overhead map with spatial navigation |
+| M4 — View 2 | 6 | [DONE] Sky View with Sun, Moon, space stations |
+| M5 — View 3 | 7 | [PENDING] Orbital cross-section |
+| M6 — Ship | 8–9 | Polished, documented, CI passing |
 
 **Total estimated time:** 18–26 days of focused development.
 
